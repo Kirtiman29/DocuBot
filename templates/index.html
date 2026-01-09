@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Insight AI</title>
+    <title>DocuBot</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
@@ -91,55 +91,73 @@
     {% endif %}
 
     <script>
-        // --- Core Functions ---
+
         async function sendMessage() {
-            const input = document.getElementById('user-input');
-            const message = input.value.trim();
-            if (!message) return;
+    const input = document.getElementById('user-input');
+    const message = input.value.trim();
+    if (!message) return;
 
-            // UI: Add User Bubble
-            appendMessage('user', message);
-            input.value = '';
+    // 1. UI: Add User Bubble
+    appendMessage('user', message);
+    input.value = '';
 
-            // UI: Add Bot Loading Bubble
-            const botMsgId = 'bot-' + Date.now();
-            appendLoadingBubble(botMsgId);
+    // 2. UI: Add Bot Loading Bubble
+    const botMsgId = 'bot-' + Date.now();
+    appendLoadingBubble(botMsgId);
 
-            try {
-                const res = await fetch('/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message })
-                });
-                const data = await res.json();
-                
-                // Remove loading and Stream text
-                removeLoadingBubble(botMsgId);
-                await streamResponse(data.reply);
-            } catch (err) {
-                removeLoadingBubble(botMsgId);
-                appendMessage('bot', "I'm sorry, I couldn't process that request.");
-            }
-        }
+    try {
+        const response = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+        });
 
-        // --- Simulated Streaming Effect ---
-        async function streamResponse(text) {
-            const chatWindow = document.getElementById('chat-window');
-            const wrapper = document.createElement('div');
-            wrapper.className = 'flex justify-start';
+        if (!response.ok) throw new Error("Failed to connect to server");
+
+        // 3. Remove loading bubble and prepare for streaming
+        removeLoadingBubble(botMsgId);
+        
+        // Create an empty bubble for the bot's response
+        const chatWindow = document.getElementById('chat-window');
+        const wrapper = document.createElement('div');
+        wrapper.className = 'flex justify-start';
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'bg-white border text-slate-700 p-4 rounded-2xl rounded-tl-none shadow-sm max-w-[85%]';
+        wrapper.appendChild(contentDiv);
+        chatWindow.appendChild(wrapper);
+
+        // 4. Handle the Stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
             
-            const div = document.createElement('div');
-            div.className = 'bg-white border text-slate-700 p-4 rounded-2xl rounded-tl-none shadow-sm max-w-[85%]';
-            wrapper.appendChild(div);
-            chatWindow.appendChild(wrapper);
-
-            const words = text.split(' ');
-            for (let i = 0; i < words.length; i++) {
-                div.innerText += words[i] + ' ';
-                chatWindow.scrollTop = chatWindow.scrollHeight;
-                await new Promise(resolve => setTimeout(resolve, 40)); // Adjust speed here
+            // SSE format is "data: {"token": "word"}\n\n"
+            // We split by lines to handle multiple tokens in one chunk
+            const lines = chunk.split('\n');
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.substring(6));
+                        contentDiv.innerText += data.token; // Append the word
+                        chatWindow.scrollTop = chatWindow.scrollHeight; // Auto-scroll
+                    } catch (e) {
+                        console.error("Error parsing stream chunk", e);
+                    }
+                }
             }
         }
+
+    } catch (err) {
+        removeLoadingBubble(botMsgId);
+        appendMessage('bot', "❌ Error: Could not connect to the AI model. Make sure Ollama is running.");
+        console.error(err);
+    }
+}
 
         // --- UI Helpers ---
         function appendMessage(sender, text) {
